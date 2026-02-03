@@ -1,0 +1,20 @@
+{
+    "name": "pungro-payment-server",
+    "version": "2.0.0",
+    "description": "풍로 그룹 지급결제 시스템 - Slack 연동 서버",
+    "main": "index.js",
+    "scripts": {
+          "start": "node index.js",
+          "dev": "nodemon index.js"
+    },
+    "dependencies": {
+          "@slack/bolt": "^3.17.1",
+          "@supabase/supabase-js": "^2.39.0"
+    },
+    "devDependencies": {
+          "nodemon": "^3.0.2"
+    },
+    "engines": {
+          "node": ">=18.0.0"
+    }
+}
