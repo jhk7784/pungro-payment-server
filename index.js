@@ -118,6 +118,32 @@ function parsePaymentRequest(text) {
     };
   }
 
+  // 패턴 3: "지급요청 100,000원 거래처 내용" 형식
+  const requestPattern = /지급\s*요청\s+([0-9,]+)\s*원?\s+(\S+)\s+(.+)/;
+  const requestMatch = text.match(requestPattern);
+
+  if (requestMatch) {
+    return {
+      amount: parseInt(requestMatch[1].replace(/,/g, '')),
+      category: '기타',
+      description: requestMatch[3].trim(),
+      vendor: requestMatch[2],
+    };
+  }
+
+  // 패턴 4: "지급요청 100,000원 내용" 형식 (거래처 없음)
+  const requestPattern2 = /지급\s*요청\s+([0-9,]+)\s*원?\s+(.+)/;
+  const requestMatch2 = text.match(requestPattern2);
+
+  if (requestMatch2) {
+    return {
+      amount: parseInt(requestMatch2[1].replace(/,/g, '')),
+      category: '기타',
+      description: requestMatch2[2].trim(),
+      vendor: null,
+    };
+  }
+
   // 구조화된 형식 파싱
   const amount = text.match(patterns.amount);
   const category = text.match(patterns.category);
