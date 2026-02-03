@@ -32,12 +32,21 @@ const receiver = new ExpressReceiver({
   signingSecret: SLACK_SIGNING_SECRET,
 });
 
+// 루트 엔드포인트
+receiver.router.get('/', (req, res) => {
+  res.json({
+    name: '풍로 지급결제 서버',
+    status: 'running',
+    version: '2.0.1'
+  });
+});
+
 // Health check 엔드포인트
 receiver.router.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
-    version: '2.0.0'
+    version: '2.0.1'
   });
 });
 
@@ -488,16 +497,23 @@ app.command('/지급요청', async ({ command, ack, respond }) => {
 (async () => {
   await loadStoreChannelMap();
 
-  await app.start(PORT);
+  // Railway에서 0.0.0.0에 바인딩 필요
+  const server = await app.start({
+    port: PORT,
+    host: '0.0.0.0'
+  });
+
   console.log('');
   console.log('🚀 ================================');
   console.log(`🚀 풍로 지급결제 서버 실행 중`);
+  console.log(`🚀 Host: 0.0.0.0`);
   console.log(`🚀 Port: ${PORT}`);
   console.log('🚀 ================================');
   console.log('');
   console.log('📡 Endpoints:');
+  console.log(`   GET  / - 서버 정보`);
+  console.log(`   GET  /health - 헬스 체크`);
   console.log(`   POST /slack/events - Slack 이벤트`);
   console.log(`   POST /slack/actions - Slack 버튼 액션`);
-  console.log(`   GET  /health - 헬스 체크`);
   console.log('');
 })();
