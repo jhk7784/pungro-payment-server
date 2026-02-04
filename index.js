@@ -37,11 +37,24 @@ const receiver = new ExpressReceiver({
   signingSecret: SLACK_SIGNING_SECRET,
 });
 
+// ========================================
+// CORS 미들웨어
+// ========================================
+receiver.router.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
 receiver.router.get('/', (req, res) => {
   res.json({
     name: '풍로 지급결제 서버',
     status: 'running',
-    version: '3.0.0',
+    version: '3.1.0',
   });
 });
 
@@ -51,6 +64,124 @@ receiver.router.get('/health', async (req, res) => {
     res.json({ status: 'ok', database: 'connected', timestamp: new Date().toISOString() });
   } catch (error) {
     res.status(500).json({ status: 'error', database: 'disconnected' });
+  }
+});
+
+// ========================================
+// REST API 엔드포인트
+// ========================================
+
+// GET /api/stores - 매장 목록
+receiver.router.get('/api/stores', async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM stores ORDER BY name');
+    res.json(rows);
+  } catch (error) {
+    console.error('❌ GET /api/stores error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /api/payment-requests - 지급요청 목록
+receiver.router.get('/api/payment-requests', async (req, res) => {
+  try {
+    const { store_id, status } = req.query;
+    let query = `
+      SELECT pr.*, s.name as store_name
+      FROM payment_requests pr
+      LEFT JOIN stores s ON pr.store_id = s.id
+      WHERE 1=1
+    `;
+    const params = [];
+    let paramIndex = 1;
+
+    if (store_id) {
+      query += ` AND pr.store_id = $${paramIndex++}`;
+      params.push(store_id);
+    }
+    if (status) {
+      query += ` AND pr.status = $${paramIndex++}`;
+      params.push(status);
+    }
+
+    query += ' ORDER BY pr.created_at DESC';
+
+    const { rows } = await pool.query(query, params);
+    res.json(rows);
+  } catch (error) {
+    console.error('❌ GET /api/payment-requests error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /api/payment-requests/:id - 지급요청 상세
+receiver.router.get('/api/payment-requests/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { rows } = await pool.query(
+      `SELECT pr.*, s.name as store_name, v.name as vendor_name
+       FROM payment_requests pr
+       LEFT JOIN stores s ON pr.store_id = s.id
+       LEFT JOIN vendors v ON pr.vendor_id = v.id
+       WHERE pr.id = $1`,
+      [id]
+    );
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'Payment request not found' });
+    }
+    res.json(rows[0]);
+  } catch (error) {
+    console.error('❌ GET /api/payment-requests/:id error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /api/stats - 통계
+receiver.router.get('/api/stats', async (req, res) => {
+  try {
+    // 매장별 총액
+    const storeStats = await pool.query(`
+      SELECT s.id, s.name,
+             COUNT(pr.id) as request_count,
+             COALESCE(SUM(pr.amount), 0) as total_amount,
+             COUNT(CASE WHEN pr.status = 'pending' THEN 1 END) as pending_count,
+             COUNT(CASE WHEN pr.status = 'approved' THEN 1 END) as approved_count,
+             COUNT(CASE WHEN pr.status = 'paid' THEN 1 END) as paid_count,
+             COUNT(CASE WHEN pr.status = 'rejected' THEN 1 END) as rejected_count
+      FROM stores s
+      LEFT JOIN payment_requests pr ON s.id = pr.store_id
+      GROUP BY s.id, s.name
+      ORDER BY s.name
+    `);
+
+    // 상태별 건수
+    const statusStats = await pool.query(`
+      SELECT status,
+             COUNT(*) as count,
+             COALESCE(SUM(amount), 0) as total_amount
+      FROM payment_requests
+      GROUP BY status
+    `);
+
+    // 이번달 통계
+    const monthlyStats = await pool.query(`
+      SELECT
+        COUNT(*) as total_requests,
+        COALESCE(SUM(amount), 0) as total_amount,
+        COUNT(CASE WHEN status = 'paid' THEN 1 END) as paid_count,
+        COALESCE(SUM(CASE WHEN status = 'paid' THEN amount END), 0) as paid_amount
+      FROM payment_requests
+      WHERE created_at >= date_trunc('month', CURRENT_DATE)
+    `);
+
+    res.json({
+      by_store: storeStats.rows,
+      by_status: statusStats.rows,
+      this_month: monthlyStats.rows[0],
+    });
+  } catch (error) {
+    console.error('❌ GET /api/stats error:', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
