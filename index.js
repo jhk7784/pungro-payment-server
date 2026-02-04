@@ -23,7 +23,9 @@ const {
 // ========================================
 const pool = new Pool({
   connectionString: DATABASE_URL,
-  ssl: false,
+  ssl: {
+    rejectUnauthorized: false,
+  },
 });
 
 pool.on('error', (err) => {
