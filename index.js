@@ -294,8 +294,8 @@ app.message(async ({ message, say, client }) => {
       await say({
         thread_ts: message.ts,
         text: '❌ 지급요청 형식을 확인해주세요.\n\n' +
-              '*간단 형식:*\n`150000 식자재 채소류 구매`\n\n' +
-              '*상세 형식:*\n```\n[지급요청]\n금액: 150,000원\n카테고리: 식자재\n내용: 채소류 구매\n```',
+          '*간단 형식:*\n`150000 식자재 채소류 구매`\n\n' +
+          '*상세 형식:*\n```\n[지급요청]\n금액: 150,000원\n카테고리: 식자재\n내용: 채소류 구매\n```',
       });
       return;
     }
@@ -334,10 +334,10 @@ app.message(async ({ message, say, client }) => {
     await say({
       thread_ts: message.ts,
       text: `✅ 지급요청이 접수되었습니다.\n\n` +
-            `💰 금액: ${parsed.amount.toLocaleString()}원\n` +
-            `📁 카테고리: ${parsed.category}\n` +
-            `📝 내용: ${parsed.description}\n\n` +
-            `승인 대기 중입니다. 처리되면 알려드릴게요!`,
+        `💰 금액: ${parsed.amount.toLocaleString()}원\n` +
+        `📁 카테고리: ${parsed.category}\n` +
+        `📝 내용: ${parsed.description}\n\n` +
+        `승인 대기 중입니다. 처리되면 알려드릴게요!`,
     });
 
   } catch (error) {
@@ -396,9 +396,9 @@ app.action('approve_payment', async ({ body, ack, client }) => {
         channel: request.slack_channel_id,
         thread_ts: request.slack_message_ts,
         text: `✅ *지급결제가 승인되었습니다!*\n\n` +
-              `💰 금액: ${request.amount.toLocaleString()}원\n` +
-              `📝 내용: ${request.description}\n` +
-              `⏰ 승인일시: ${new Date().toLocaleString('ko-KR')}`,
+          `💰 금액: ${request.amount.toLocaleString()}원\n` +
+          `📝 내용: ${request.description}\n` +
+          `⏰ 승인일시: ${new Date().toLocaleString('ko-KR')}`,
       });
     }
 
@@ -454,10 +454,10 @@ app.action('reject_payment', async ({ body, ack, client }) => {
         channel: request.slack_channel_id,
         thread_ts: request.slack_message_ts,
         text: `❌ *지급결제가 거절되었습니다.*\n\n` +
-              `💰 금액: ${request.amount.toLocaleString()}원\n` +
-              `📝 내용: ${request.description}\n` +
-              `⏰ 처리일시: ${new Date().toLocaleString('ko-KR')}\n\n` +
-              `궁금한 점이 있으면 담당자에게 문의해주세요.`,
+          `💰 금액: ${request.amount.toLocaleString()}원\n` +
+          `📝 내용: ${request.description}\n` +
+          `⏰ 처리일시: ${new Date().toLocaleString('ko-KR')}\n\n` +
+          `궁금한 점이 있으면 담당자에게 문의해주세요.`,
       });
     }
 
@@ -505,10 +505,10 @@ app.command('/지급요청', async ({ command, ack, respond }) => {
 
     await respond({
       text: `✅ 지급요청이 접수되었습니다!\n\n` +
-            `💰 금액: ${parsed.amount.toLocaleString()}원\n` +
-            `📁 카테고리: ${parsed.category}\n` +
-            `📝 내용: ${parsed.description}\n\n` +
-            `승인되면 알려드릴게요!`,
+        `💰 금액: ${parsed.amount.toLocaleString()}원\n` +
+        `📁 카테고리: ${parsed.category}\n` +
+        `📝 내용: ${parsed.description}\n\n` +
+        `승인되면 알려드릴게요!`,
     });
 
   } catch (error) {
