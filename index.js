@@ -1,53 +1,57 @@
 /**
  * 풍로 그룹 지급결제 시스템 - Slack 연동 서버
- *
- * Slack Bolt SDK + Supabase 연동
- * Railway 배포용
+ * Slack Bolt SDK + AWS RDS PostgreSQL
  */
 
+require('dotenv').config();
 const { App, ExpressReceiver } = require('@slack/bolt');
-const { createClient } = require('@supabase/supabase-js');
+const { Pool } = require('pg');
 
 // ========================================
 // 환경 변수
 // ========================================
 const {
   PORT = 3000,
-  SUPABASE_URL,
-  SUPABASE_SERVICE_KEY,
+  DATABASE_URL,
   SLACK_BOT_TOKEN,
   SLACK_SIGNING_SECRET,
   SLACK_APPROVAL_CHANNEL,
 } = process.env;
 
 // ========================================
-// Supabase 클라이언트
+// PostgreSQL 연결
 // ========================================
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+const pool = new Pool({
+  connectionString: DATABASE_URL,
+  ssl: false,
+});
+
+pool.on('error', (err) => {
+  console.error('❌ PostgreSQL pool error:', err);
+});
 
 // ========================================
-// Express Receiver (커스텀 라우트용)
+// Express Receiver
 // ========================================
 const receiver = new ExpressReceiver({
   signingSecret: SLACK_SIGNING_SECRET,
 });
 
-// 루트 엔드포인트
 receiver.router.get('/', (req, res) => {
   res.json({
     name: '풍로 지급결제 서버',
     status: 'running',
-    version: '2.0.1'
+    version: '3.0.0',
   });
 });
 
-// Health check 엔드포인트
-receiver.router.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    timestamp: new Date().toISOString(),
-    version: '2.0.1'
-  });
+receiver.router.get('/health', async (req, res) => {
+  try {
+    await pool.query('SELECT 1');
+    res.json({ status: 'ok', database: 'connected', timestamp: new Date().toISOString() });
+  } catch (error) {
+    res.status(500).json({ status: 'error', database: 'disconnected' });
+  }
 });
 
 // ========================================
@@ -59,37 +63,25 @@ const app = new App({
 });
 
 // ========================================
-// 매장-채널 매핑 (DB에서 동적 로드 가능)
+// 매장-채널 매핑
 // ========================================
 let STORE_CHANNEL_MAP = {};
 
 async function loadStoreChannelMap() {
   try {
-    const { data: stores } = await supabase
-      .from('stores')
-      .select('id, name, slack_channel_id');
-
-    if (stores) {
-      STORE_CHANNEL_MAP = {};
-      stores.forEach(store => {
-        if (store.slack_channel_id) {
-          STORE_CHANNEL_MAP[store.slack_channel_id] = {
-            store_id: store.id,
-            name: store.name,
-          };
-        }
-      });
-      console.log('📍 Store-Channel map loaded:', Object.keys(STORE_CHANNEL_MAP).length, 'stores');
-    }
+    const { rows } = await pool.query('SELECT id, name, slack_channel_id FROM stores');
+    STORE_CHANNEL_MAP = {};
+    rows.forEach((store) => {
+      if (store.slack_channel_id) {
+        STORE_CHANNEL_MAP[store.slack_channel_id] = {
+          store_id: store.id,
+          name: store.name,
+        };
+      }
+    });
+    console.log('📍 Store-Channel map loaded:', Object.keys(STORE_CHANNEL_MAP).length, 'stores');
   } catch (error) {
     console.error('Failed to load store-channel map:', error);
-    // 기본값 설정
-    STORE_CHANNEL_MAP = {
-      'C001': { store_id: '1', name: '풍로 블랙 본점' },
-      'C002': { store_id: '2', name: '풍로 제주 신화월드' },
-      'C003': { store_id: '3', name: '풍로 중문점' },
-      'C004': { store_id: '4', name: '벨미' },
-    };
   }
 }
 
@@ -115,7 +107,7 @@ function parsePaymentRequest(text) {
     };
   }
 
-  // 새 패턴: "지급요청 100,000원 거래처 내용"
+  // 패턴: "지급요청 100,000원 거래처 내용"
   const requestPattern = /지급\s*요청\s+([0-9,]+)\s*원?\s+(\S+)\s+(.+)/;
   const requestMatch = text.match(requestPattern);
   if (requestMatch) {
@@ -127,7 +119,7 @@ function parsePaymentRequest(text) {
     };
   }
 
-  // 새 패턴: "지급요청 100,000원 내용"
+  // 패턴: "지급요청 100,000원 내용"
   const requestPattern2 = /지급\s*요청\s+([0-9,]+)\s*원?\s+(.+)/;
   const requestMatch2 = text.match(requestPattern2);
   if (requestMatch2) {
@@ -161,34 +153,41 @@ function parsePaymentRequest(text) {
 // ========================================
 async function findVendorId(vendorName) {
   if (!vendorName) return null;
-
-  const { data } = await supabase
-    .from('vendors')
-    .select('id')
-    .ilike('name', `%${vendorName}%`)
-    .limit(1)
-    .single();
-
-  return data?.id || null;
+  try {
+    const { rows } = await pool.query(
+      'SELECT id FROM vendors WHERE name ILIKE $1 LIMIT 1',
+      [`%${vendorName}%`]
+    );
+    return rows[0]?.id || null;
+  } catch (error) {
+    console.error('❌ Vendor lookup error:', error);
+    return null;
+  }
 }
 
 // ========================================
-// Supabase에 요청 저장
+// DB에 요청 저장
 // ========================================
 async function savePaymentRequest(request) {
-  const { data, error } = await supabase
-    .from('payment_requests')
-    .insert([request])
-    .select()
-    .single();
-
-  if (error) {
-    console.error('❌ Supabase insert error:', error);
-    throw error;
-  }
-
-  console.log('✅ Payment request saved:', data.id);
-  return data;
+  const { rows } = await pool.query(
+    `INSERT INTO payment_requests
+     (store_id, vendor_id, requester_name, amount, category, description, status, slack_channel_id, slack_message_ts)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     RETURNING *`,
+    [
+      request.store_id,
+      request.vendor_id,
+      request.requester_name,
+      request.amount,
+      request.category,
+      request.description,
+      request.status,
+      request.slack_channel_id,
+      request.slack_message_ts,
+    ]
+  );
+  console.log('✅ Payment request saved:', rows[0].id);
+  return rows[0];
 }
 
 // ========================================
@@ -198,11 +197,7 @@ async function sendApprovalNotification(request, storeName, requesterName) {
   const blocks = [
     {
       type: 'header',
-      text: {
-        type: 'plain_text',
-        text: '📋 새 지급결제 요청',
-        emoji: true,
-      },
+      text: { type: 'plain_text', text: '📋 새 지급결제 요청', emoji: true },
     },
     {
       type: 'section',
@@ -215,10 +210,7 @@ async function sendApprovalNotification(request, storeName, requesterName) {
     },
     {
       type: 'section',
-      text: {
-        type: 'mrkdwn',
-        text: `*📝 내용:*\n${request.description}`,
-      },
+      text: { type: 'mrkdwn', text: `*📝 내용:*\n${request.description}` },
     },
     {
       type: 'actions',
@@ -249,11 +241,10 @@ async function sendApprovalNotification(request, storeName, requesterName) {
       blocks,
     });
 
-    // 메시지 타임스탬프 저장
-    await supabase
-      .from('payment_requests')
-      .update({ slack_message_ts: result.ts })
-      .eq('id', request.id);
+    await pool.query('UPDATE payment_requests SET slack_message_ts = $1 WHERE id = $2', [
+      result.ts,
+      request.id,
+    ]);
 
     console.log('📤 Approval notification sent');
     return result;
@@ -267,13 +258,11 @@ async function sendApprovalNotification(request, storeName, requesterName) {
 // 메시지 이벤트 핸들러
 // ========================================
 app.message(async ({ message, say, client }) => {
-  // 봇 메시지, 수정된 메시지 무시
   if (message.bot_id || message.subtype) return;
 
   const storeInfo = STORE_CHANNEL_MAP[message.channel];
-  if (!storeInfo) return; // 등록되지 않은 채널
+  if (!storeInfo) return;
 
-  // 지급요청 키워드 체크
   const text = message.text || '';
   if (!text.includes('지급요청') && !text.includes('지급 요청') && !text.match(/^[0-9,]+\s+/)) {
     return;
@@ -282,26 +271,23 @@ app.message(async ({ message, say, client }) => {
   console.log(`📨 Payment request received from ${storeInfo.name}`);
 
   try {
-    // 메시지 파싱
     const parsed = parsePaymentRequest(text);
     if (!parsed || !parsed.amount || parsed.amount < 1000) {
       await say({
         thread_ts: message.ts,
-        text: '❌ 지급요청 형식을 확인해주세요.\n\n' +
+        text:
+          '❌ 지급요청 형식을 확인해주세요.\n\n' +
           '*간단 형식:*\n`150000 식자재 채소류 구매`\n\n' +
           '*상세 형식:*\n```\n[지급요청]\n금액: 150,000원\n카테고리: 식자재\n내용: 채소류 구매\n```',
       });
       return;
     }
 
-    // 요청자 정보 조회
     const userInfo = await client.users.info({ user: message.user });
     const requesterName = userInfo.user.real_name || userInfo.user.name;
 
-    // 거래처 ID 조회
     const vendorId = await findVendorId(parsed.vendor);
 
-    // Supabase에 저장
     const request = await savePaymentRequest({
       store_id: storeInfo.store_id,
       vendor_id: vendorId,
@@ -314,26 +300,23 @@ app.message(async ({ message, say, client }) => {
       slack_message_ts: message.ts,
     });
 
-    // 👀 이모지 반응 추가
     await client.reactions.add({
       channel: message.channel,
       timestamp: message.ts,
       name: 'eyes',
     });
 
-    // 대표에게 승인 요청 알림
     await sendApprovalNotification(request, storeInfo.name, requesterName);
 
-    // 요청자에게 접수 확인
     await say({
       thread_ts: message.ts,
-      text: `✅ 지급요청이 접수되었습니다.\n\n` +
+      text:
+        `✅ 지급요청이 접수되었습니다.\n\n` +
         `💰 금액: ${parsed.amount.toLocaleString()}원\n` +
         `📁 카테고리: ${parsed.category}\n` +
         `📝 내용: ${parsed.description}\n\n` +
         `승인 대기 중입니다. 처리되면 알려드릴게요!`,
     });
-
   } catch (error) {
     console.error('❌ Message handler error:', error);
     await say({
@@ -353,28 +336,24 @@ app.action('approve_payment', async ({ body, ack, client }) => {
   console.log(`✅ Approving payment request: ${requestId}`);
 
   try {
-    // Supabase 업데이트
-    const { data: request, error } = await supabase
-      .from('payment_requests')
-      .update({
-        status: 'approved',
-        processed_at: new Date().toISOString(),
-        processed_by: body.user.name,
-      })
-      .eq('id', requestId)
-      .select()
-      .single();
+    const { rows } = await pool.query(
+      `UPDATE payment_requests
+       SET status = 'approved', processed_at = NOW(), processed_by = $1
+       WHERE id = $2
+       RETURNING *`,
+      [body.user.name, requestId]
+    );
+    const request = rows[0];
 
-    if (error) throw error;
-
-    // 원본 메시지 업데이트
-    const newBlocks = body.message.blocks.slice(0, -1); // 버튼 제거
+    const newBlocks = body.message.blocks.slice(0, -1);
     newBlocks.push({
       type: 'context',
-      elements: [{
-        type: 'mrkdwn',
-        text: `✅ *승인됨* by ${body.user.name} (${new Date().toLocaleString('ko-KR')})`,
-      }],
+      elements: [
+        {
+          type: 'mrkdwn',
+          text: `✅ *승인됨* by ${body.user.name} (${new Date().toLocaleString('ko-KR')})`,
+        },
+      ],
     });
 
     await client.chat.update({
@@ -384,18 +363,17 @@ app.action('approve_payment', async ({ body, ack, client }) => {
       blocks: newBlocks,
     });
 
-    // 요청자에게 알림
     if (request.slack_channel_id) {
       await client.chat.postMessage({
         channel: request.slack_channel_id,
         thread_ts: request.slack_message_ts,
-        text: `✅ *지급결제가 승인되었습니다!*\n\n` +
+        text:
+          `✅ *지급결제가 승인되었습니다!*\n\n` +
           `💰 금액: ${request.amount.toLocaleString()}원\n` +
           `📝 내용: ${request.description}\n` +
           `⏰ 승인일시: ${new Date().toLocaleString('ko-KR')}`,
       });
     }
-
   } catch (error) {
     console.error('❌ Approve action error:', error);
   }
@@ -411,28 +389,24 @@ app.action('reject_payment', async ({ body, ack, client }) => {
   console.log(`❌ Rejecting payment request: ${requestId}`);
 
   try {
-    // Supabase 업데이트
-    const { data: request, error } = await supabase
-      .from('payment_requests')
-      .update({
-        status: 'rejected',
-        processed_at: new Date().toISOString(),
-        processed_by: body.user.name,
-      })
-      .eq('id', requestId)
-      .select()
-      .single();
+    const { rows } = await pool.query(
+      `UPDATE payment_requests
+       SET status = 'rejected', processed_at = NOW(), processed_by = $1
+       WHERE id = $2
+       RETURNING *`,
+      [body.user.name, requestId]
+    );
+    const request = rows[0];
 
-    if (error) throw error;
-
-    // 원본 메시지 업데이트
     const newBlocks = body.message.blocks.slice(0, -1);
     newBlocks.push({
       type: 'context',
-      elements: [{
-        type: 'mrkdwn',
-        text: `❌ *거절됨* by ${body.user.name} (${new Date().toLocaleString('ko-KR')})`,
-      }],
+      elements: [
+        {
+          type: 'mrkdwn',
+          text: `❌ *거절됨* by ${body.user.name} (${new Date().toLocaleString('ko-KR')})`,
+        },
+      ],
     });
 
     await client.chat.update({
@@ -442,19 +416,18 @@ app.action('reject_payment', async ({ body, ack, client }) => {
       blocks: newBlocks,
     });
 
-    // 요청자에게 알림
     if (request.slack_channel_id) {
       await client.chat.postMessage({
         channel: request.slack_channel_id,
         thread_ts: request.slack_message_ts,
-        text: `❌ *지급결제가 거절되었습니다.*\n\n` +
+        text:
+          `❌ *지급결제가 거절되었습니다.*\n\n` +
           `💰 금액: ${request.amount.toLocaleString()}원\n` +
           `📝 내용: ${request.description}\n` +
           `⏰ 처리일시: ${new Date().toLocaleString('ko-KR')}\n\n` +
           `궁금한 점이 있으면 담당자에게 문의해주세요.`,
       });
     }
-
   } catch (error) {
     console.error('❌ Reject action error:', error);
   }
@@ -472,7 +445,6 @@ app.command('/지급요청', async ({ command, ack, respond }) => {
     return;
   }
 
-  // 커맨드 텍스트 파싱: /지급요청 150000 식자재 채소 구매
   const parsed = parsePaymentRequest(command.text);
   if (!parsed || !parsed.amount) {
     await respond({
@@ -493,18 +465,19 @@ app.command('/지급요청', async ({ command, ack, respond }) => {
       description: parsed.description,
       status: 'pending',
       slack_channel_id: command.channel_id,
+      slack_message_ts: null,
     });
 
     await sendApprovalNotification(request, storeInfo.name, command.user_name);
 
     await respond({
-      text: `✅ 지급요청이 접수되었습니다!\n\n` +
+      text:
+        `✅ 지급요청이 접수되었습니다!\n\n` +
         `💰 금액: ${parsed.amount.toLocaleString()}원\n` +
         `📁 카테고리: ${parsed.category}\n` +
         `📝 내용: ${parsed.description}\n\n` +
         `승인되면 알려드릴게요!`,
     });
-
   } catch (error) {
     console.error('❌ Command error:', error);
     await respond('⚠️ 요청 처리 중 오류가 발생했습니다.');
@@ -515,25 +488,23 @@ app.command('/지급요청', async ({ command, ack, respond }) => {
 // 서버 시작
 // ========================================
 (async () => {
+  try {
+    await pool.query('SELECT 1');
+    console.log('✅ PostgreSQL connected');
+  } catch (error) {
+    console.error('❌ PostgreSQL connection failed:', error);
+    process.exit(1);
+  }
+
   await loadStoreChannelMap();
 
-  // Railway에서 0.0.0.0에 바인딩 필요
-  const server = await app.start({
-    port: PORT,
-    host: '0.0.0.0'
-  });
+  await app.start({ port: PORT, host: '0.0.0.0' });
 
   console.log('');
   console.log('🚀 ================================');
-  console.log(`🚀 풍로 지급결제 서버 실행 중`);
-  console.log(`🚀 Host: 0.0.0.0`);
+  console.log('🚀 풍로 지급결제 서버 실행 중');
   console.log(`🚀 Port: ${PORT}`);
+  console.log('🚀 Database: AWS RDS PostgreSQL');
   console.log('🚀 ================================');
-  console.log('');
-  console.log('📡 Endpoints:');
-  console.log(`   GET  / - 서버 정보`);
-  console.log(`   GET  /health - 헬스 체크`);
-  console.log(`   POST /slack/events - Slack 이벤트`);
-  console.log(`   POST /slack/actions - Slack 버튼 액션`);
   console.log('');
 })();
