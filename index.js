@@ -97,7 +97,6 @@ async function loadStoreChannelMap() {
 // 지급요청 메시지 파싱
 // ========================================
 function parsePaymentRequest(text) {
-  // 패턴 1: "금액: 150,000원 / 카테고리: 식자재 / 내용: ..."
   const patterns = {
     amount: /금액[:\s]*([0-9,]+)\s*원?/i,
     category: /카테고리[:\s]*([가-힣a-zA-Z]+)/i,
@@ -105,10 +104,8 @@ function parsePaymentRequest(text) {
     vendor: /거래처[:\s]*(.+?)(?:\n|$)/i,
   };
 
-  // 패턴 2: 간단한 형식 "150000 식자재 채소 구매"
   const simplePattern = /^([0-9,]+)\s+([가-힣]+)\s+(.+)$/;
   const simpleMatch = text.trim().match(simplePattern);
-
   if (simpleMatch) {
     return {
       amount: parseInt(simpleMatch[1].replace(/,/g, '')),
@@ -118,10 +115,9 @@ function parsePaymentRequest(text) {
     };
   }
 
-  // 패턴 3: "지급요청 100,000원 거래처 내용" 형식
+  // 새 패턴: "지급요청 100,000원 거래처 내용"
   const requestPattern = /지급\s*요청\s+([0-9,]+)\s*원?\s+(\S+)\s+(.+)/;
   const requestMatch = text.match(requestPattern);
-
   if (requestMatch) {
     return {
       amount: parseInt(requestMatch[1].replace(/,/g, '')),
@@ -131,10 +127,9 @@ function parsePaymentRequest(text) {
     };
   }
 
-  // 패턴 4: "지급요청 100,000원 내용" 형식 (거래처 없음)
+  // 새 패턴: "지급요청 100,000원 내용"
   const requestPattern2 = /지급\s*요청\s+([0-9,]+)\s*원?\s+(.+)/;
   const requestMatch2 = text.match(requestPattern2);
-
   if (requestMatch2) {
     return {
       amount: parseInt(requestMatch2[1].replace(/,/g, '')),
@@ -144,7 +139,6 @@ function parsePaymentRequest(text) {
     };
   }
 
-  // 구조화된 형식 파싱
   const amount = text.match(patterns.amount);
   const category = text.match(patterns.category);
   const description = text.match(patterns.description);
